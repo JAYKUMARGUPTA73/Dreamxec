@@ -122,6 +122,7 @@ const generateOtp = async (req, res) => {
       await publishEvent(events.EMAIL_OTP_REQUEST,{
         email,
 otp:otp      });
+console.log(otp)
 
     }
 
@@ -132,6 +133,8 @@ otp:otp      });
         to: `+91${phonenumber}`,
         message: `Your DreamXec OTP is ${otp}. Valid for 5 minutes.`,
       });
+      console.log(otp)
+
     }
 
     return res.json({

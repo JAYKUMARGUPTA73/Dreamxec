@@ -1,5 +1,5 @@
 const prisma = require("../../config/prisma");
-const uploadToS3 = require("../../utils/uploadToS3");
+const {uploadToS3} = require("../../utils/uploadToS3");
 const { publishEvent } = require('../../services/eventPublisher.service');
 const EVENTS = require('../../config/events');
 

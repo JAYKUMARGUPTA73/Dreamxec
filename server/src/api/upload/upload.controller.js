@@ -1,4 +1,4 @@
-const uploadToS3 = require('../../utils/uploadToS3');
+const {uploadToS3} = require('../../utils/uploadToS3');
 const AppError = require('../../utils/AppError');
 const catchAsync = require('../../utils/catchAsync');
 

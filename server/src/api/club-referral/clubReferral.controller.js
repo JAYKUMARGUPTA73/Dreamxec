@@ -1,4 +1,4 @@
-const uploadToS3 = require("../../utils/uploadToS3");
+const {uploadToS3} = require("../../utils/uploadToS3");
 const prisma = require("../../config/prisma");
 
 exports.referClub = async (req, res) => {

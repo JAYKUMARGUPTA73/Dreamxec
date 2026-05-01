@@ -1,6 +1,6 @@
 const razorpay = require("../../services/payment.service");
 const prisma = require("../../config/prisma");
-const uploadToS3 = require('../../utils/uploadToS3');
+const {uploadToS3} = require('../../utils/uploadToS3');
 const redis = require("../../services/redis.service");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");

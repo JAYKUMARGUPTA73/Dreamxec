@@ -1,7 +1,7 @@
 const prisma = require('../../config/prisma');
 const catchAsync = require('../../utils/catchAsync');
 const AppError = require('../../utils/AppError');
-const uploadToS3 = require('../../utils/uploadToS3');
+const {uploadToS3} = require('../../utils/uploadToS3');
 
 // ─────────────────────────────────────────────────
 // HELPERS
