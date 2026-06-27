@@ -1,0 +1,79 @@
+================================================================================
+DREAMXEC CODEBASE - COMPLETE ERRORS, BUGS, & VULNERABILITIES ANALYSIS REPORT
+================================================================================
+
+
+
+-----------------------------------------------------------------------
+4. PRISMA SCHEMA MISMATCH DATABASE CRASH (STUDENT ANALYTICS)
+--------------------------------------------------------------------------------
+* FEATURE: Student Dashboard Campaign Analytics.
+* ERROR: The query in the controller select block requested "currentAmount" 
+  directly from Prisma, but the actual schema field in MongoDB is named "amountRaised".
+* POTENTIAL ISSUES: Loading the student analytics dashboard caused an immediate 
+  backend database validation crash because Prisma queried a non-existent field.
+* FILE LOCATION: server/src/api/user-projects/user-project.controller.js (lines 551-580)
+* RESOLUTION STATUS: Fixed.
+* HOW WE FIXED IT: Replaced the incorrect "currentAmount" field selection and 
+  formula logic inside getStudentAnalytics with "amountRaised".
+
+--------------------------------------------------------------------------------
+5. SECURITY VULNERABILITY: UNPROTECTED RAZORPAY WEBHOOK ENDPOINT
+--------------------------------------------------------------------------------
+* FEATURE: Crowdfunding Donations Payment Capturing.
+* ERROR: The webhook endpoint (/api/donations/webhook) processes payloads directly 
+  from req.body without verifying the Razorpay webhook signature header.
+* POTENTIAL ISSUES: An attacker can send spoofed HTTP POST requests with fake 
+  payment IDs to the webhook endpoint, which would mark uncaptured donations 
+  as complete and artificially increment campaign funding.
+* FILE LOCATION: server/src/api/donations/donation.controller.js (line 171 onwards)
+* RESOLUTION STATUS: Pending.
+* HOW TO FIX IT: Implement webhook signature verification using Razorpay's 
+  crypto validate utility before processing any capture event logic.
+
+--------------------------------------------------------------------------------
+6. SECURITY VULNERABILITY: BYPASS OF ACCOUNT SUSPENSION IN AUTH GUARDS
+--------------------------------------------------------------------------------
+* FEATURE: API Security and Authorization Middleware.
+* ERROR: The protect middleware checks JWT integrity and looks up the user, 
+  but does not verify if the user's accountStatus is active.
+* POTENTIAL ISSUES: Suspended, blocked, or banned users can continue calling 
+  all protected API endpoints until their active JWT token naturally expires.
+* FILE LOCATION: server/src/middleware/auth.middleware.js (lines 42-91)
+* RESOLUTION STATUS: Pending.
+* HOW TO FIX IT: Add a status check block to the middleware:
+  "if (currentUser.accountStatus !== 'ACTIVE') return next(new AppError('Account is suspended', 403));"
+
+--------------------------------------------------------------------------------
+7. LOGIC FLAW: AUTOMATED STUDENT VERIFICATION BYPASS
+--------------------------------------------------------------------------------
+* FEATURE: Student & President Verification Verification Flow.
+* ERROR: Upon receiving payment confirmation, the controller immediately sets 
+  the user fields "studentVerified: true" and "canCreateCampaign: true" in the 
+  database, ignoring code comments warning against doing so before admin document review.
+* POTENTIAL ISSUES: Anyone can pay a tiny fee (5 INR) and instantly get student 
+  verified, bypassing administrative approval. Furthermore, if the admin subsequently 
+  rejects the request, the user's verified status is never revoked.
+* FILE LOCATION: server/src/api/studentVerification/studentverfication.controller.js (lines 92-120 and 198-224)
+* RESOLUTION STATUS: Pending.
+* HOW TO FIX IT: Keep flags false during registration/payment; only set 
+  "studentVerified: true" inside the admin approval endpoint. Revoke student 
+  permissions in the database upon admin rejection.
+
+--------------------------------------------------------------------------------
+8. DATA LEAKAGE: EXPOSURE OF SENSITIVE DATABASE FIELDS IN RESPONSES
+--------------------------------------------------------------------------------
+* FEATURE: Auth and Profile API Response Payloads.
+* ERROR: When updating profiles or logging in, the controller returns the raw 
+  Prisma update output, which includes internal columns from the database.
+* POTENTIAL ISSUES: Hashed passwords, verification tokens, and password reset 
+  tokens are returned inside the JSON response bodies to the client browser.
+* FILE LOCATION: server/src/api/profile/profile.controller.js (line 255 onwards) 
+  and server/src/api/auth/auth.controller.js (lines 29-41)
+* RESOLUTION STATUS: Pending.
+* HOW TO FIX IT: Explicitly select safe return fields in Prisma, or manually 
+  unset sensitive variables (e.g. user.password = undefined, user.resetPasswordToken = undefined) 
+  before sending responses.
+
+================================================================================
+EOF

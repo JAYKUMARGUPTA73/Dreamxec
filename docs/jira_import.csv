@@ -1,0 +1,276 @@
+Summary,Issue Type,Priority,Component,Description
+"Epic: Resolve Sensitive Data Leakage & API Payload Bloat","Epic","High","Security","Audit and secure all backend controllers to ensure they only expose data fields that are strictly necessary for the frontend components. This Epic addresses critical security vulnerabilities (hashed password exposure, system tokens leakage) and performance issues (bloated payloads on card lists and search views)."
+"Secure User & Donor Profile Update Responses","Story","High","Profile","As a registered user/donor, I want my password hashes and security tokens to be excluded from API response bodies, so that my credentials and password reset keys cannot be hijacked by malicious third-party scripts.
+
+Context: The backend profile update endpoints currently return the direct database output of prisma.user.update and prisma.donor.upsert. This leaks hashed passwords, password reset tokens, and email verification tokens in the response JSON.
+
+Acceptance Criteria:
+1. Given an authenticated user updates their profile description or profile picture
+2. When the server returns the updated profile object
+3. Then the fields password, resetPasswordToken, resetPasswordExpiry, verificationToken, and verificationTokenExpiry must be absent from the JSON response.
+
+Technical Reference: server/src/api/profile/profile.controller.js"
+"Strip Hashed Passwords & System Tokens from Auth Payloads","Story","High","Authentication","As a logging-in user, I want the authentication response payload to contain only my user metadata, so that my active account verification or password reset keys are not exposed to the browser.
+
+Context: The createAndSendToken helper blanks out user.password but fails to clear active security tokens (verificationToken and resetPasswordToken), meaning they are sent in the payload on every successful login.
+
+Acceptance Criteria:
+1. Given a user successfully logs in
+2. When the server issues the JWT token and user profile object
+3. Then the fields verificationToken and resetPasswordToken must be set to undefined before sending the response.
+
+Technical Reference: server/src/api/auth/auth.controller.js"
+"Optimize Public Campaign & Opportunity List Payloads","Story","Medium","Campaigns","As a mobile app/website visitor, I want public campaign search pages to load quickly, so that my mobile data is not wasted on loading full descriptions, FAQs, and team lists for cards.
+
+Context: The endpoints GET /api/user-projects/public and GET /api/donor-projects/public lack root-level select statements in their Prisma queries. This causes the backend to send detailed description texts, team members arrays, and FAQs in public list responses, none of which are used by CampaignCard.tsx or BrowseProjects.tsx.
+
+Acceptance Criteria:
+1. Given a guest loads the Browse Campaigns or Browse Opportunities page
+2. When the network queries the list endpoints
+3. Then the response payloads must exclude the description text, teamMembers arrays, and faqs lists, sending only card-relevant columns.
+
+Technical References: server/src/api/user-projects/user-project.controller.js, server/src/api/donor-projects/donor-project.controller.js"
+"Securely Implement Student Application Counter on Opportunity Cards","Story","High","Opportunities","As a student seeking sponsorships, I want to see the correct count of applicants on Opportunity cards without my private cover letter being leaked, so that my personal data remains confidential.
+
+Context: The opportunity cards try to display the count of applied students via project.interestedUsers?.length which currently resolves to 0 because the backend does not fetch application counts. To prevent leaking student cover letters and contact info publicly, we need to query only the relation count using Prisma's _count aggregation.
+
+Acceptance Criteria:
+1. Given the public opportunities list is requested
+2. When the server queries Prisma
+3. Then it must include _count: { select: { applications: true } } and return only the count, and the front-end card must render the correct number of applicants.
+
+Technical References: server/src/api/donor-projects/donor-project.controller.js, client/src/components/BrowseProjects.tsx"
+"Transition OAuth Login Session Redirects to HttpOnly Cookies","Story","High","Authentication","As a social login user (Google/LinkedIn), I want my authentication session tokens to be stored securely, so that they cannot be harvested from the browser URL search query by third-party tracking scripts.
+
+Context: The Google and LinkedIn OAuth callbacks redirect users back to the frontend with the active authentication token in the query parameters (?token=${token}). These tokens can be easily leaked to external scripts via Referer headers.
+
+Acceptance Criteria:
+1. Given a user logs in via Google/LinkedIn
+2. When the OAuth callback redirects to the client callback url
+3. Then the authentication token must not be appended to the URL query string, and must instead be passed via secure, HttpOnly, SameSite cookies.
+
+Technical Reference: server/src/api/auth/auth.controller.js"
+"Redact Sensitive Bank Details in Admin Withdrawal Lists","Story","High","Admin Panel","As a student withdrawing campaign funds, I want my bank account number to be redacted on lists, so that my private financial details are not exposed to unauthorised viewers.
+
+Context: The endpoint GET /api/admin/withdrawals joins the full bankAccount model object. This exposes raw bank account numbers directly in list responses for all withdrawal requests.
+
+Acceptance Criteria:
+1. Given an admin views the withdrawal requests table
+2. When the backend query is returned
+3. Then the raw bank account numbers must be masked (e.g. ******1234), and the full number must only be loaded via specific details lookup when the admin explicitly initiates a transaction approval.
+
+Technical Reference: server/src/api/admin/admin.controller.js"
+"Optimize Admin Verification & Referral Tables Payload","Story","Medium","Admin Panel","As a platform administrator, I want verification request lists to load quickly without downloading private contact documents in bulk, so that I can review applications efficiently.
+
+Context: The admin list endpoints for club verifications and referrals fetch and return the complete database documents (including studentPhone, studentEmail, ficEmail, ficPhone, and massive stringified alumni JSON arrays) which are not rendered in list grids.
+
+Acceptance Criteria:
+1. Given an administrator loads the Club Verifications or Referrals table page
+2. When the client queries the list API
+3. Then the response must exclude studentPhone, studentEmail, ficPhone, ficEmail, and alumni arrays, loading them only when the administrator opens a specific request detail modal.
+
+Technical References: server/src/api/club-verification/clubVerification.controller.js, server/src/api/admin-club/adminClubVerification.controller.js, server/src/api/club-referral/clubReferral.controller.js"
+"Optimize Club Campaign Retrieval API Payloads","Story","Medium","Clubs","As a club president or site reviewer, I want club campaign dashboard list pages to retrieve only cards-level metadata, so that my browser does not consume bandwidth loading nested FAQs, descriptions, and team structures for card grids.
+
+Context: The club campaign retrieval endpoints for approved, pending, and rejected campaigns, along with public club details campaign queries, lack a select statement. This results in heavy, unneeded columns like description, teamMembers, and faqs being serialized and sent in list responses.
+
+Acceptance Criteria:
+1. Given a club president reviews their club campaigns list
+2. When the backend fetches campaigns under the club
+3. Then the response must exclude heavy fields like description, faqs, and teamMembers.
+
+Technical Reference: server/src/api/clubs/club.controller.js"
+"Secure Student Verification Workflow and Fix Status Revocation","Story","High","Student Verification","As a platform administrator, I want student verification requests to remain in PENDING status until I manually approve their documents, so that unverified users cannot bypass the KYC check, and rejected verifications immediately revoke campaign creation permissions.
+
+Context: Inside the verify endpoint, the transaction updates user flags to verified and sets request status to VERIFIED instead of PENDING. Upon rejection, the user's verified status is not revoked.
+
+Acceptance Criteria:
+1. Given a student submits verification documents
+2. When the server processes verification
+3. Then the request status must be PENDING, and studentVerified/canCreateCampaign must remain false.
+4. Given an admin rejects verification, the user's studentVerified/canCreateCampaign flags must be set to false.
+
+Technical Reference: server/src/api/studentVerification/studentverfication.controller.js"
+"Strip Hashed Passwords and Sensitive Tokens from Admin and Status API Responses","Story","High","Admin Panel","As an administrator or donor, I want my account's hashed credentials, PAN numbers, and verification tokens to be hidden from dashboard list/status API responses, so that these secrets are not exposed to client web panels.
+
+Context: Admin endpoints for checking user details, changing user/donor statuses, and verifying donors return the raw database objects, exposing password hashes, tokens, and PAN cards in JSON.
+
+Acceptance Criteria:
+1. Given an admin performs status actions or loads details
+2. When the response is returned
+3. Then the password, PAN number, and token fields must be set to undefined or excluded.
+
+Technical Reference: server/src/api/admin/admin.controller.js"
+"Clean Duplicate Functions and Resolve Schema Mismatches in Admin Endpoints","Story","High","Admin Panel","As an operations team member, I want the admin endpoints for uploading club members, getting club members, and updating club status to function without throwing database crashes, so that club administration actions are reliable.
+
+Context: admin.controller.js contains duplicated functions (manageUserStatus, getAllClubs, manageClubStatus) and queries a non-existent clubMembership model and updating non-existent Club.status.
+
+Acceptance Criteria:
+1. Given admin endpoints are called
+2. When the backend executes queries
+3. Then it must query the correct clubMember model and avoid duplicates or schema mismatches.
+
+Technical Reference: server/src/api/admin/admin.controller.js"
+"Secure Commenter Auth Details Leak in Campaign Comments API","Story","High","Campaign Comments","As a campaign commenter, I want my account's password hashes and tokens to be stripped from comments creation responses, so that my authentication secrets are not exposed to the public.
+
+Context: Campaign comment creation includes the user/donor document without select blocks, leaking commenter password hashes and tokens to other users.
+
+Acceptance Criteria:
+1. Given any user posts a comment on a campaign
+2. When the backend creates the comment and returns it
+3. Then the user or donor include block must only select id, name, and profilePicture.
+
+Technical Reference: server/src/api/campaign-comments/campaignComment.repository.js"
+"Fix Schema Mismatch Crashes in Admin Club Approval and Rejection Flow","Story","High","Admin Clubs","As an administrator, I want to reject club verification and referral requests without causing database runtime crashes, so that my administrative operations run smoothly.
+
+Context: The rejection controllers attempt to write to non-existent fields (rejectionReason, reviewedBy, reviewedAt) in ClubVerification and ClubReferralRequest models in prisma schema.
+
+Acceptance Criteria:
+1. Given an admin rejects a club request
+2. When the query is executed
+3. Then it updates without database crashes by ensuring fields exist in schema.prisma.
+
+Technical References: server/src/api/admin-club/adminClubVerification.controller.js, server/src/api/club-referral/clubReferral.controller.js"
+"Mount Dead Subscription Endpoints and Fix Missing Environment Configs","Story","High","Subscriptions","As a student seeking platform membership, I want subscription creation and webhook endpoints to be reachable on the server, so that my paid account upgrades function correctly.
+
+Context: Subscription module routes are completely unmounted in server.js, and subscription.controller.js references missing env variables (RZP_KEY_ID, RZP_KEY_SECRET, RZP_PLAN_ID).
+
+Acceptance Criteria:
+1. Given a user initiates subscription
+2. When client sends request to /api/subscription
+3. Then endpoints process request using standard Razorpay environment variables.
+
+Technical Reference: server/src/api/subscription/subscription.controller.js"
+"Mount Webhook Router and Fix Webhook Signature Verification","Story","High","Webhooks","As a payment processing service, I want captured payment webhook requests to be processed securely, so that donations are updated immediately when completed.
+
+Context: Webhook routes are unmounted in server.js. Furthermore, the signature verification uses parsed req.body instead of raw request payloads, failing validation checks.
+
+Acceptance Criteria:
+1. Given Razorpay captured webhooks trigger
+2. When the server processes /api/webhook/razorpay
+3. Then signature is verified using raw body bytes and donation status completed is saved.
+
+Technical Reference: server/src/api/webhook/webhook.controller.js"
+"Fix Mismatched Auth Protection on Opportunity View Details Route","Story","High","Opportunities","As an unauthenticated guest, I want to view opportunity details pages without being forced to log in, so that I can read descriptions before deciding to register.
+
+Context: The route router.get('/:id') is placed after router.use(protect) in routes.js, locking out public visitors from viewing opportunity details despite controller-level allowance.
+
+Acceptance Criteria:
+1. Given a public guest browses an opportunity
+2. When opening the details page
+3. Then it retrieves opportunity details successfully.
+
+Technical Reference: server/src/api/donor-projects/donor-project.routes.js"
+"Fix MongoDB Raw Insert and Swap Event Bug in Opportunity Creation","Story","High","Opportunities","As a donor, I want my created opportunities to map correctly to my profile identity, so that my opportunities are linked and I don't trigger invalid email notifications on detail views.
+
+Context: opportunity creation uses Mongo raw commands inserting donorId as a string, which breaks prisma relation lookups. Also, single getOpportunity endpoint triggers CAMPAIGN_CREATED event instead of creation endpoint.
+
+Acceptance Criteria:
+1. Given a donor creates a project
+2. When standard prisma create executes
+3. Then the database ObjectId is cast properly, and CAMPAIGN_CREATED event publishes only on creation.
+
+Technical Reference: server/src/api/donor-projects/donor-project.controller.js"
+"Prevent DB Connection Exhaustion from Direct PrismaClient Instantiations","Story","Medium","Database","As an operations developer, I want controllers to share a single database connection, so that MongoDB does not hit its connection limit and reject requests under traffic.
+
+Context: Multiple controller files instantiate new PrismaClient() directly, creating connection pool leaks.
+
+Acceptance Criteria:
+1. Given database queries run in wishlist or joinRequest controllers
+2. When connecting
+3. Then it uses the shared config/prisma singleton client.
+
+Technical References: server/src/api/wishlist/wishlist.controller.js, server/src/api/clubs/joinRequest.controller.js"
+"Resolve Infinite Request Hanging in Newsletter Re-subscription","Story","High","Newsletter","As a re-subscribing user, I want my newsletter subscription requests to complete successfully, so that my browser does not hang infinitely.
+
+Context: subscribe controller returns update promise without sending response when inactive subscriber tries to re-subscribe.
+
+Acceptance Criteria:
+1. Given a previously unsubscribed user resubscribes
+2. When submitting to newsletter API
+3. Then server updates database and returns 200 JSON payload, terminating request.
+
+Technical Reference: server/src/api/newsletter/newsletter.controller.js"
+"Resolve Inconsistent Database Payment Status Values","Story","Medium","Payments","As a system auditor, I want payment status columns to hold consistent states, so that client dashboards accurately calculate total amounts raised.
+
+Context: Mismatched payment success values (SUCCESS, PAID, completed) written across different files pollute data.
+
+Acceptance Criteria:
+1. Given successful payment updates
+2. When database updates execute
+3. Then paymentStatus is updated to a unified completed status.
+
+Technical References: server/src/api/payments/payment.controller.js, server/src/api/webhook/webhook.controller.js"
+"Fix OTP Verification Failures due to Raw vs Normalized Phone Lookup","Story","High","OTP","As a registering student, I want my verified phone OTP record to match during verification checkout, so that I don't get blocked with mismatch messages.
+
+Context: createOrder normalizes phone format in Redis, but verify endpoint checks raw mobileNumber, causing OTP verified matching mismatch.
+
+Acceptance Criteria:
+1. Given student completes OTP verification
+2. When submitting final document verification
+3. Then lookup uses normalized phone formatting logic.
+
+Technical Reference: server/src/api/studentVerification/studentverfication.controller.js"
+"Delete Dead Code and Invalid Projects API Folder","Story","Low","Cleanup","As a developer, I want dead features referencing non-existent models to be removed, so that codebase remains clean.
+
+Context: Projects api folder references non-existent Project model, causing confusion.
+
+Acceptance Criteria:
+1. Given codebase cleanup
+2. When inspecting api directories
+3. Then projects folder is fully deleted.
+
+Technical Reference: server/src/api/projects/"
+"Clean Up Unused App1.tsx Component in Client Project","Story","Low","Cleanup","As a new developer, I want unused layout components to be removed from the project workspace, so that I don't get confused about which file is the true React application shell.
+
+Context: App1.tsx was a backup file created during UI iterations and is not imported by main.tsx.
+
+Acceptance Criteria:
+1. Given client-side files
+2. When inspecting client/src
+3. Then App1.tsx is removed and React application compiles cleanly.
+
+Technical Reference: client/src/App1.tsx"
+"Clean Up Unused Development & Support Scripts in Server Project","Story","Low","Cleanup","As a fresher developer, I want outdated one-time scripts to be removed from the root directory, so that the project root folder remains clean.
+
+Context: auto-fix-zod.cjs and cleanup-applications.js are one-time helper scripts that are no longer used by package.json or production.
+
+Acceptance Criteria:
+1. Given server-side files
+2. When checking the project root
+3. Then auto-fix-zod.cjs and cleanup-applications.js are deleted.
+
+Technical References: server/auto-fix-zod.cjs, server/cleanup-applications.js"
+"Eliminate Duplicate Club Referral Logic across Controllers","Story","High","Refactoring","As a developer, I want club referral approval and rejection logic to reside in a single place, so that we do not maintain duplicate copies of the same logic.
+
+Context: Logic to retrieve, approve, and reject referrals is copy-pasted across clubReferral.controller.js and adminClubReferral.controller.js.
+
+Acceptance Criteria:
+1. Given referral admin operations are requested
+2. When resolving endpoints
+3. Then it routes requests to adminClubReferral.controller.js and deletes duplicates.
+
+Technical References: server/src/api/club-referral/clubReferral.controller.js, server/src/api/admin-club/adminClubReferral.controller.js"
+"Eliminate Duplicate Club Verification Logic across Controllers","Story","High","Refactoring","As a developer, I want the logic for approving and rejecting club verification requests to reside in a single controller, so that we avoid copy-pasting code and bugs.
+
+Context: clubVerification.controller.js and adminClubVerification.controller.js contain duplicate approve/reject logic.
+
+Acceptance Criteria:
+1. Given club verification operations are requested
+2. When route checks are resolved
+3. Then it uses adminClubVerification.controller.js and deletes duplication.
+
+Technical References: server/src/api/club-verification/clubVerification.controller.js, server/src/api/admin-club/adminClubVerification.controller.js"
+"Remove Empty Search API Files","Story","Low","Cleanup","As a developer, I want dead features referencing non-existent models to be removed, so that codebase remains clean.
+
+Context: Folder server/src/api/search contains only empty files that serve no purpose.
+
+Acceptance Criteria:
+1. Given search endpoint scan
+2. When reviewing directories
+3. Then the search folder is fully removed.
+
+Technical Reference: server/src/api/search"
+
+
+

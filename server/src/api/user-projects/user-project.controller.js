@@ -494,11 +494,14 @@ exports.getPublicUserProjects = catchAsync(
   const projects    = hasNextPage ? rawProjects.slice(0, limit) : rawProjects;
   const nextCursor  = hasNextPage ? projects[projects.length - 1].id : null;
 
+
   const userIds = [...new Set(projects.map(p => p.userId).filter(Boolean))];
   const users = await prisma.user.findMany({
     where: { id: { in: userIds } },
     select: { id: true, name: true },
   });
+
+  
   const userMap = Object.fromEntries(users.map(u => [u.id, u]));
 
   const userProjects = projects
@@ -552,7 +555,7 @@ exports.getStudentAnalytics = catchAsync(async (req, res, next) => {
     where: { userId: req.user.id },
     select: {
       status: true,
-      currentAmount: true,
+      amountRaised: true,
       donations: { select: { amount: true } }
     }
   });
@@ -573,8 +576,8 @@ exports.getStudentAnalytics = catchAsync(async (req, res, next) => {
     else if (status === 'REJECTED') analytics.rejectedCount++;
 
     // Calculate funds raised
-    // Use currentAmount or calculate from donations
-    const raised = p.currentAmount || p.donations?.reduce((sum, d) => sum + d.amount, 0) || 0;
+    // Use amountRaised or calculate from donations
+    const raised = p.amountRaised || p.donations?.reduce((sum, d) => sum + d.amount, 0) || 0;
     analytics.totalRaised += raised;
   });
 

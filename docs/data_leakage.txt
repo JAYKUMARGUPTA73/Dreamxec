@@ -1,0 +1,214 @@
+================================================================================
+DREAMXEC CODEBASE - ADVANCED SENSITIVE DATA LEAKAGE & PAYLOAD EXPOSURE REPORT
+================================================================================
+
+This document outlines all instances where the backend Express API exposes 
+sensitive data, leaks private user columns, or sends excessive database fields 
+to the React frontend when only a subset is required.
+
+--------------------------------------------------------------------------------
+1. CRITICAL VULNERABILITIES: SENSITIVE DATABASE FIELD LEAKS
+--------------------------------------------------------------------------------
+
+### 1.1 Profile Update Endpoints Leaking Hashed Passwords & Tokens
+*   **File Path:** [server/src/api/profile/profile.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/profile/profile.controller.js)
+*   **Endpoints:** `PUT /api/profile/me` and `POST /api/profile/picture`
+*   **Exposed Fields:** "password" (hashed), "verificationToken", "verificationTokenExpiry", "resetPasswordToken", "resetPasswordExpiry".
+*   **The Issue:** The backend performs updates using Prisma client commands and returns the raw updated records directly to the client payload:
+    - Donor updates (Lines 234-258)
+    - User updates (Lines 333-348)
+    - Profile picture updates (Lines 369-388)
+*   **Potential Risk:** Any inspection of network requests (or malicious third-party script running in the browser) can harvest the hashed password (which can be cracked offline) and the active reset password/verification tokens (which can be used to hijack user accounts).
+*   **How to Fix:** Project only safe columns via Prisma's `select` block or manually clean the updated object before response serialization:
+    ```javascript
+    const cleanProfile = { ...updated };
+    delete cleanProfile.password;
+    delete cleanProfile.verificationToken;
+    delete cleanProfile.verificationTokenExpiry;
+    delete cleanProfile.resetPasswordToken;
+    delete cleanProfile.resetPasswordExpiry;
+    ```
+
+### 1.2 Authentication Helper exposing Active System Tokens
+*   **File Path:** [server/src/api/auth/auth.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/auth/auth.controller.js)
+*   **Endpoint:** `POST /api/auth/login`
+*   **Exposed Fields:** "verificationToken", "resetPasswordToken", and their expiry fields.
+*   **The Issue:** The `createAndSendToken` helper (Lines 29-41) sets the hashed password to `undefined` but fails to strip other system-level security tokens from the returning user profile:
+    ```javascript
+    user.password = undefined;
+    ```
+*   **Potential Risk:** Active tokens are sent to the client browser on every login, increasing exposure to token harvesting.
+*   **How to Fix:** Set all token fields to `undefined` inside the helper before calling `res.json`.
+
+---
+
+--------------------------------------------------------------------------------
+2. MASSIVE PAYLOAD BLOAT & STRUCTURAL OVER-EXPOSURE (LIST VIEWS)
+--------------------------------------------------------------------------------
+
+### 2.1 Public Campaigns List exposing Full Descriptions, FAQs, & Team Members
+*   **File Path:** [server/src/api/user-projects/user-project.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/user-projects/user-project.controller.js)
+*   **Endpoint:** `GET /api/user-projects/public` (Lines 467-518)
+*   **The Issue:** The Prisma query `prisma.userProject.findMany` lacks a root-level `select` block. It retrieves and sends the complete database document for every project.
+*   **Frontend Usage Mismatch:** The React frontend campaign card (**[CampaignCard.tsx](file:///c:/ongoing_works/codes/Dreamxec/client/src/components/CampaignCard.tsx)**) only displays:
+    - Campaign `title` and `imageUrl`
+    - College name and Club name (`club.college`, `club.name`)
+    - Goals and progress (`goalAmount`, `amountRaised`/`currentAmount`)
+    - Star `rating`
+    - Count of milestones (`milestones.length`)
+*   **Unnecessary Data Sent:** The backend sends the full `description` (multi-kilobyte markdown text), the complete `teamMembers` list, `faqs` list, `presentationDeckUrl`, and `campaignMedia` arrays for every project in the browse list.
+*   **Potential Risk:** Extreme network payload bloat when browsing projects, leading to slower page loads and higher data usage for users, especially on mobile connections.
+*   **How to Fix:** Restrict the query to only fetch card-relevant metadata:
+    ```javascript
+    const rawProjects = await prisma.userProject.findMany({
+      where: { status: 'APPROVED' },
+      select: {
+        id: true,
+        title: true,
+        imageUrl: true,
+        goalAmount: true,
+        amountRaised: true,
+        rating: true,
+        userId: true,
+        createdAt: true,
+        club: { select: { id: true, name: true, college: true } },
+        milestones: { select: { id: true } } // Fetch only IDs to compute count
+      }
+    });
+    ```
+
+### 2.2 Public Opportunities List exposing Full Content
+*   **File Path:** [server/src/api/donor-projects/donor-project.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/donor-projects/donor-project.controller.js)
+*   **Endpoint:** `GET /api/donor-projects/public` (Lines 218-232)
+*   **The Issue:** Similar to public campaigns, `prisma.donorProject.findMany` fetches and sends the entire table columns for every opportunity.
+*   **Frontend Usage Mismatch:** The card renderer inside **[BrowseProjects.tsx](file:///c:/ongoing_works/codes/Dreamxec/client/src/components/BrowseProjects.tsx)** only utilizes basic header info, logo/image, skills required, timeline, and count of applicants.
+*   **Unnecessary Data Sent:** Sends the entire project `description` details and timeline strings when displaying them as grid cards.
+*   **How to Fix:** Apply selective root projection to fetch only safe card fields.
+
+---
+
+--------------------------------------------------------------------------------
+3. USER PRIVACY & FUNCTIONAL LEAKAGE IN OPPORTUNITIES APPLICANTS COUNT
+--------------------------------------------------------------------------------
+
+### 3.1 Exposing Application Lists vs. Broken Applicants Counter
+*   **File Path:** [server/src/api/donor-projects/donor-project.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/donor-projects/donor-project.controller.js)
+*   **Endpoint:** `GET /api/donor-projects/public` (Lines 218-232)
+*   **The Issue:** The frontend opportunity card (**[BrowseProjects.tsx](file:///c:/ongoing_works/codes/Dreamxec/client/src/components/BrowseProjects.tsx#L164)**) attempts to display the total count of applications via `project.interestedUsers?.length`. However, the backend does not join or count applications in `getPublicDonorProjects`. The client mappers init it to `interestedUsers: []`, making the card constantly display `0 students applied`.
+*   **The Risk:** If a developer attempts to fix this by blindly joining `applications: true` in the find query, it will leak all students' private application details (like cover letters, emails, names) publicly to anyone browsing the cards.
+*   **How to Fix:** Fetch the relation count securely and performantly without loading database records using Prisma's `_count` aggregation:
+    ```javascript
+    const donorProjects = await prisma.donorProject.findMany({
+      where: { status: 'APPROVED' },
+      include: {
+        donor: { select: { id: true, name: true, organizationName: true } },
+        _count: {
+          select: { applications: true } // Fetches only the count of applicants safely!
+        }
+      }
+    });
+    ```
+    Then map `_count.applications` to the client payload as a safe count integer.
+
+---
+
+--------------------------------------------------------------------------------
+4. SECURE PROTOCOLS & NETWORK LEAKS
+--------------------------------------------------------------------------------
+
+### 4.1 JWT Authentication Tokens exposed in Browser Query Parameters
+*   **File Path:** [server/src/api/auth/auth.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/auth/auth.controller.js)
+*   **Endpoints:** `GET /api/auth/google/callback` and `GET /api/auth/linkedin/callback` (Lines 272-350)
+*   **The Issue:** After successful third-party login (Google/LinkedIn), the backend redirects users to the frontend with the active authentication token in the URL:
+    ```javascript
+    res.redirect(`${process.env.CLIENT_URL}/auth/callback?token=${token}`);
+    ```
+*   **Potential Risk:** Active tokens in query strings are saved in browser history, visible to shoulder-surfing, and leaked to third-party CDNs or scripts via HTTP `Referer` headers.
+*   **How to Fix:** Use secure HTTP-only cookies to pass authorization sessions, or use window messaging (`postMessage`) from a pop-up window to transfer the token securely inside the memory space.
+
+---
+
+--------------------------------------------------------------------------------
+5. SENSITIVE FINANCIAL ACCOUNT DETAILS EXPOSED (WITHDRAWAL LIST)
+--------------------------------------------------------------------------------
+
+### 5.1 Raw Bank Account Details Returned in Admin Withdrawal Search
+*   **File Path:** [server/src/api/admin/admin.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/admin/admin.controller.js)
+*   **Endpoint:** `GET /api/admin/withdrawals` (Lines 797-820)
+*   **The Issue:** When fetching lists of withdrawal requests, the Prisma include block joins the entire `bankAccount` model object.
+*   **Exposed Fields:** "accountNumber", "accountHolderName", "bankName", "isDefault", etc.
+*   **Potential Risk:** Exposes raw bank account numbers directly in list responses for all withdrawal requests, making private financial information vulnerable in search queries.
+*   **How to Fix:** Mask the account number (e.g. `******1234`) in list queries, or only retrieve/display the full details in secure modal overlays on demand using the specific `GET /api/admin/withdrawal/:id` endpoint.
+
+---
+
+--------------------------------------------------------------------------------
+6. LARGE PAYLOADS & SENSITIVE DETAILS IN ADMIN LIST TABLES
+--------------------------------------------------------------------------------
+
+### 6.1 Club Verifications & Referrals Lists Exposing Contact Details & Large Alumni Arrays
+*   **File Paths:**
+    - [server/src/api/club-verification/clubVerification.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/club-verification/clubVerification.controller.js) (Lines 95-105)
+    - [server/src/api/admin-club/adminClubVerification.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/admin-club/adminClubVerification.controller.js) (Lines 6-18)
+    - [server/src/api/club-referral/clubReferral.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/club-referral/clubReferral.controller.js) (Lines 80-83)
+*   **Endpoints:** `GET /api/club-verification`, `GET /api/admin/club-verifications`, `GET /api/admin/referrals`
+*   **The Issue:** The list controllers fetch and return the complete database documents for all requests, including `studentPhone`, `studentEmail`, `ficEmail`, `ficPhone`, `docUrl`/`evidenceUrls`, and the potentially massive stringified JSON `alumni` array.
+*   **Potential Risk:**
+    - Severe payload bloat on list views, sending data the UI does not use (the dashboard lists only require basic keys like names, college, and status).
+    - Unnecessary exposure of contact numbers, emails, and document attachments in list results.
+*   **How to Fix:** Apply select projections in Prisma to only retrieve columns required by the list table grid (e.g., `id`, `clubName`, `collegeName`, `presidentName`, `status`, `createdAt`), and load full details only via specific details lookup endpoints.
+
+--------------------------------------------------------------------------------
+7. CLUB CAMPAIGNS PAYLOAD BLOAT (LIST VIEWS)
+--------------------------------------------------------------------------------
+
+### 7.1 Unneeded Fields Exposed in Club Campaign Lists
+*   **File Path:** [server/src/api/clubs/club.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/clubs/club.controller.js)
+*   **Endpoints:** 
+    - `GET /api/clubs/:clubId/campaigns/approved` (Line 503)
+    - `GET /api/clubs/:clubId/campaigns/pending` (Line 561)
+    - `GET /api/clubs/:clubId/campaigns/rejected` (Line 627)
+    - `GET /api/clubs/public/:id` (Line 799)
+*   **The Issue:** The backend uses `prisma.userProject.findMany` with no root-level select projection blocks. This serializes full faqs, teamMembers arrays, and detailed descriptions back to list grids.
+*   **How to Fix:** Use select blocks in Prisma queries to load only the card relevant details: `id`, `title`, `imageUrl`, `goalAmount`, `amountRaised`, `rating`, `userId`, `createdAt`.
+
+--------------------------------------------------------------------------------
+8. STUDENT VERIFICATION KYC BYPASS AND REVOCATION FAILURE
+--------------------------------------------------------------------------------
+
+### 8.1 Critical KYC Check Bypass on Post-Payment Document Upload
+*   **File Path:** [server/src/api/studentVerification/studentverfication.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/studentVerification/studentverfication.controller.js)
+*   **Endpoint:** `POST /api/student-verification/verify` (Line 52)
+*   **The Issue:** 
+    - The transaction automatically updates user flags to `studentVerified: true` and `canCreateCampaign: true` BEFORE the admin reviews the uploaded identification files.
+    - The verification request status is created as `VERIFIED` instead of `PENDING` (Line 117).
+    - In `rejectStudentVerification`, rejecting a request sets request status to `REJECTED` but fails to revoke user flags `studentVerified` and `canCreateCampaign`.
+*   **How to Fix:** Keep user flags `false` and request status `PENDING` upon verify callback, and implement user flag updates (revoking privileges to false) upon verification rejection.
+
+--------------------------------------------------------------------------------
+9. CREDENTIALS AND TOKENS LEAK IN ADMIN USER/DONOR ENDPOINTS
+--------------------------------------------------------------------------------
+
+### 9.1 Hashed Passwords and Sensitive Identifiers returned to Client
+*   **File Path:** [server/src/api/admin/admin.controller.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/admin/admin.controller.js)
+*   **Endpoints:**
+    - `GET /api/admin/users/:id` (Line 1244)
+    - `PUT /api/admin/users/:id/status` (Lines 451, 607)
+    - `PUT /api/admin/donors/:id/verify` (Line 1141)
+    - `PUT /api/admin/donors/:id/status` (Line 1164)
+*   **The Issue:** Response bodies serialize and output the raw database model records from `prisma.user` and `prisma.donor` directly. This leaks sensitive fields like hashed password, PAN cards, verificationToken, and resetPasswordToken.
+*   **How to Fix:** Clean these attributes from returning user/donor objects or define strict `select` blocks.
+
+--------------------------------------------------------------------------------
+10. SENSITIVE CREDENTIALS LEAK IN CAMPAIGN COMMENTS
+--------------------------------------------------------------------------------
+
+### 10.1 Comment Author include Blocks leaking Passwords
+*   **File Path:** [server/src/api/campaign-comments/campaignComment.repository.js](file:///c:/ongoing_works/codes/Dreamxec/server/src/api/campaign-comments/campaignComment.repository.js)
+*   **Endpoints:** `POST /api/campaigns/:campaignId/comments` (Line 8)
+*   **The Issue:** Comment repository uses `include: { user: true, donor: true }` when creating a comment. Since no selective block is used, this leaks hashed passwords and verification tokens of the comment author.
+*   **How to Fix:** Specify selective projection blocks in comment creation/fetching repository joins to query only `id`, `name`, `profilePicture`, and `role`.
+
+================================================================================
+EOF
+
